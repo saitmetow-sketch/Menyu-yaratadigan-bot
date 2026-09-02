@@ -16,7 +16,7 @@ import db
 logging.basicConfig(level=logging.INFO)
 
 TOKEN = os.environ.get("BOT_TOKEN")
-OWNER_ID = 8588301820  # Sizning Telegram ID'ingiz
+OWNER_ID = 8588301820
 WEBHOOK_HOST = os.environ.get("RENDER_EXTERNAL_URL")
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
@@ -37,7 +37,6 @@ class BotCreatorStates(StatesGroup):
     waiting_for_bot_token = State()
 
 
-# --- USER KINO BOTLARINI FONDA BARQAROR ISHGA TUSHIRISH ---
 async def start_user_movie_bot(token: str):
     while True:
         try:
@@ -57,7 +56,7 @@ async def start_user_movie_bot(token: str):
                 await message.answer(f"🔍 Siz yuborgan kod: <b>{code}</b>\n\nKino qidirilmoqda...", parse_mode="HTML")
 
             logging.info(f"User kino boti ishga tushdi (Token: {token[:10]}...)")
-            await u_dp.start_polling(u_bot)
+            await u_dp.start_polling(u_bot, drop_pending_updates=True)
         except Exception as e:
             logging.error(f"User botida xatolik ({token[:10]}...): {e}. 10 sekunddan so'ng qayta uriniladi...")
             await asyncio.sleep(10)
@@ -169,7 +168,6 @@ async def my_bots_handler(message: types.Message):
     )
 
 
-# --- BOTga MENYU YASASH VA USER BOTINI QO'SHISH ---
 @dp.message(F.text == "🤖 Botga menyu yasash")
 async def create_bot_menu_handler(message: types.Message, state: FSMContext):
     await message.answer(
@@ -215,10 +213,7 @@ async def receive_bot_token(message: types.Message, state: FSMContext):
     data = await state.get_data()
     creator_id = data.get("creator_id")
 
-    # Tokenni bazaga saqlaymiz
     await db.save_user_bot(creator_id, token)
-
-    # User botini darhol fonda ishga tushirib yuboramiz
     asyncio.create_task(start_user_movie_bot(token))
 
     await message.answer("⏳ Botingizga kino bot uchun menyular yaratilmoqda, iltimos kuting...")
@@ -234,7 +229,6 @@ async def receive_bot_token(message: types.Message, state: FSMContext):
     await state.clear()
 
 
-# --- ADMIN PANEL ---
 def admin_panel_keyboard(is_owner: bool):
     buttons = [
         [InlineKeyboardButton(text="➕ Majburiy kanal qo'shish", callback_data="admin_add_maj")],
@@ -394,13 +388,11 @@ async def admin_remove_admin_callback(callback: types.CallbackQuery):
     await callback.answer()
 
 
-# --- STARTUP / SHUTDOWN ---
 async def on_startup(app: web.Application):
     await db.init_db()
     await bot.set_webhook(WEBHOOK_URL)
     logging.info(f"Webhook o'rnatildi: {WEBHOOK_URL}")
 
-    # Bazadagi barcha oldindan ulangan user botlarini fonda ishga tushirish
     tokens = await db.get_all_user_bots()
     for token in tokens:
         asyncio.create_task(start_user_movie_bot(token))
