@@ -37,28 +37,30 @@ class BotCreatorStates(StatesGroup):
     waiting_for_bot_token = State()
 
 
-# --- USER KINO BOTLARINI FONDA ISHGA TUSHIRISH FUNKSIYASI ---
+# --- USER KINO BOTLARINI FONDA BARQAROR ISHGA TUSHIRISH ---
 async def start_user_movie_bot(token: str):
-    u_bot = Bot(token=token)
-    u_dp = Dispatcher()
+    while True:
+        try:
+            u_bot = Bot(token=token)
+            u_dp = Dispatcher()
 
-    @u_dp.message(Command("start"))
-    async def u_start(message: types.Message):
-        await message.answer(
-            "🎬 Assalomu alaykum! Kino botga xush kelibsiz.\n\n"
-            "Kerakli kino kodini yuboring va kinoni tomosha qiling:"
-        )
+            @u_dp.message(Command("start"))
+            async def u_start(message: types.Message):
+                await message.answer(
+                    "🎬 Assalomu alaykum! Kino botga xush kelibsiz.\n\n"
+                    "Kerakli kino kodini yuboring va kinoni tomosha qiling:"
+                )
 
-    @u_dp.message()
-    async def u_movie_handler(message: types.Message):
-        code = message.text.strip()
-        await message.answer(f"🔍 Siz yuborgan kod: <b>{code}</b>\n\nKino qidirilmoqda...", parse_mode="HTML")
+            @u_dp.message()
+            async def u_movie_handler(message: types.Message):
+                code = message.text.strip()
+                await message.answer(f"🔍 Siz yuborgan kod: <b>{code}</b>\n\nKino qidirilmoqda...", parse_mode="HTML")
 
-    try:
-        logging.info(f"User kino boti ishga tushdi (Token: {token[:10]}...)")
-        await u_dp.start_polling(u_bot)
-    except Exception as e:
-        logging.error(f"User botida xatolik ({token[:10]}...): {e}")
+            logging.info(f"User kino boti ishga tushdi (Token: {token[:10]}...)")
+            await u_dp.start_polling(u_bot)
+        except Exception as e:
+            logging.error(f"User botida xatolik ({token[:10]}...): {e}. 10 sekunddan so'ng qayta uriniladi...")
+            await asyncio.sleep(10)
 
 
 async def check_subscription(user_id: int) -> bool:
@@ -167,7 +169,7 @@ async def my_bots_handler(message: types.Message):
     )
 
 
-# --- BOTGA MENYU YASASH VA USER BOTINI QO'SHISH ---
+# --- BOTga MENYU YASASH VA USER BOTINI QO'SHISH ---
 @dp.message(F.text == "🤖 Botga menyu yasash")
 async def create_bot_menu_handler(message: types.Message, state: FSMContext):
     await message.answer(
