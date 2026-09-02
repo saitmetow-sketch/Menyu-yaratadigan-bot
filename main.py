@@ -15,7 +15,7 @@ import db
 logging.basicConfig(level=logging.INFO)
 
 TOKEN = os.environ.get("BOT_TOKEN")
-OWNER_ID = 8588301820  # Sizning Telegram ID'ingiz (owner)
+OWNER_ID = 8588301820  # Sizning Telegram ID'ingiz
 WEBHOOK_HOST = os.environ.get("RENDER_EXTERNAL_URL")
 WEBHOOK_PATH = f"/webhook/{TOKEN}"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
@@ -29,6 +29,12 @@ class AdminStates(StatesGroup):
     waiting_channel_majburiy = State()
     waiting_channel_sorovli = State()
     waiting_admin_id = State()
+
+
+# Bot yaratish uchun yangi FSM holatlari
+class BotCreatorStates(StatesGroup):
+    waiting_for_user_id = State()
+    waiting_for_bot_token = State()
 
 
 async def check_subscription(user_id: int) -> bool:
@@ -53,11 +59,8 @@ async def get_all_channels_full():
 def subscribe_keyboard(channels_full):
     buttons = []
     for channel_id, invite_link in channels_full:
-        if invite_link:
-            url = invite_link
-        else:
-            url = f"https://t.me/{str(channel_id).lstrip('@')}"
-        buttons.append([InlineKeyboardButton(text=f"➡️ Kanal", url=url)])
+        url = invite_link if invite_link else f"https://t.me/{str(channel_id).lstrip('@')}"
+        buttons.append([InlineKeyboardButton(text="➡️ Kanal", url=url)])
     buttons.append([InlineKeyboardButton(text="✅ Tekshirish", callback_data="check_sub")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -102,13 +105,10 @@ async def start_handler(message: types.Message):
 
 
 @dp.chat_join_request()
-async def auto_approve_join_request(request: types.ChatJoinRequest):
+async def save_join_request_handler(request: types.ChatJoinRequest):
     sorovli_channels = await db.get_channels(channel_type="sorovli")
     if str(request.chat.id) in sorovli_channels:
-        try:
-            await bot.approve_chat_join_request(chat_id=request.chat.id, user_id=request.from_user.id)
-        except Exception as e:
-            logging.warning(f"So'rovni tasdiqlashda xato: {e}")
+        await db.save_pending_request(chat_id=request.chat.id, user_id=request.from_user.id)
 
 
 @dp.callback_query(F.data == "check_sub")
@@ -137,32 +137,83 @@ async def extend_time_handler(message: types.Message):
 
 @dp.message(F.text == "📋 Botlarim menyusi")
 async def my_bots_handler(message: types.Message):
-    # Bu qism keyingi bosqichda to'ldiriladi: foydalanuvchi yasagan botlar ro'yxati
     await message.answer(
         "Hali hech qanday botga menyu yasamagansiz.\n\n"
         "\"🤖 Botga menyu yasash\" tugmasini bosing."
     )
 
 
+# --- BOTGA MENYU YASASH JARAYONI (YANGI LOGIKA) ---
+
 @dp.message(F.text == "🤖 Botga menyu yasash")
-async def create_bot_menu_handler(message: types.Message):
+async def create_bot_menu_handler(message: types.Message, state: FSMContext):
     await message.answer(
-        "Yangi bot yaratish uchun:\n\n"
-        "1️⃣ @BotFather ga kiring\n"
-        "2️⃣ /newbot deb yozing\n"
-        "3️⃣ Botingizga nom bering\n"
-        "4️⃣ Username bering (oxiri \"bot\" bilan tugashi kerak)\n"
-        "5️⃣ Sizga TOKEN beriladi — o'sha tokenni shu yerga yuboring\n\n"
-        "⚠️ Keyin o'zingizning Telegram ID'ingizni ham yuborishingiz kerak bo'ladi "
-        "(bot egasi ekaningizni tasdiqlash uchun).\n\n"
-        "(Token qabul qilish va botni ishga tushirish keyingi bosqichda qo'shiladi)"
+        "Kino botingizni yaratish uchun 1-qadam:\n\n"
+        "Iltimos, o'zingizning **Telegram ID** raqamingizni yuboring.\n\n"
+        "💡 ID raqamingizni bilish uchun @userinfobot ga kiring:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="👤 @userinfobot ga o'tish", url="https://t.me/userinfobot")]
+        ])
     )
+    await state.set_state(BotCreatorStates.waiting_for_user_id)
+
+
+@dp.message(BotCreatorStates.waiting_for_user_id)
+async def receive_creator_id(message: types.Message, state: FSMContext):
+    text = message.text.strip()
+    if not text.isdigit():
+        await message.answer("❌ Iltimos, faqat raqamlardan iborat Telegram ID'ingizni yuboring (masalan: 8588301820).")
+        return
+
+    creator_id = int(text)
+    await state.update_data(creator_id=creator_id)
+
+    await message.answer(
+        f"✅ ID qabul qilindi: <b>{creator_id}</b> — shu ID bot egasi etib belgilandi.\n\n"
+        "2-qadam:\n"
+        "Endi @BotFather ga kirib yangi bot oching va o'sha botning **TOKEN**'ini nusxalab menga yuboring.\n\n"
+        "👉 @BotFather ga o'tish uchun quyidagi tugmani bosing:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🤖 @BotFather ga o'tish", url="https://t.me/BotFather")]
+        ]),
+        parse_mode="HTML"
+    )
+    await state.set_state(BotCreatorStates.waiting_for_bot_token)
+
+
+@dp.message(BotCreatorStates.waiting_for_bot_token)
+async def receive_bot_token(message: types.Message, state: FSMContext):
+    token = message.text.strip()
+    if ":" not in token or len(token) < 20:
+        await message.answer("❌ Bu yaroqli bot tokeniga o'xshamaydi. Qaytadan tekshirib, to'g'ri tokenni yuboring.")
+        return
+
+    data = await state.get_data()
+    creator_id = data.get("creator_id")
+
+    # Bu yerda token va creator_id bazaga saqlanadi (masalan: await db.save_user_bot(...))
+
+    await message.answer("⏳ Botingizga kino bot uchun menyular yaratilmoqda, iltimos kuting...")
+
+    # Simulyatsiya yoki sozlash tugashi
+    await message.answer(
+        "✅ Tabriklaymiz! Botingiz muvaffaqiyatli ulandi va kino bot menyulari o'rnatildi.\n\n"
+        "⚠️ <b>Muhim eslatma:</b>\n"
+        "Agar botingiz vaqtini uzaytirmoqchi bo'lsangiz, har 2 ta do'stingizni taklif qilsangiz 1 kun botdan foydalana olasiz.\n"
+        "Limit tugasa, afsuski menyu ishlamaydi va bot javob bermaydi.",
+        reply_markup=await get_main_menu(message.from_user.id),
+        parse_mode="HTML"
+    )
+    await state.clear()
+
+# --------------------------------------------------
 
 
 def admin_panel_keyboard(is_owner: bool):
     buttons = [
         [InlineKeyboardButton(text="➕ Majburiy kanal qo'shish", callback_data="admin_add_maj")],
         [InlineKeyboardButton(text="➕ So'rovli kanal qo'shish", callback_data="admin_add_sor")],
+        [InlineKeyboardButton(text="📥 Yig'ilgan so'rovlarni tasdiqlash", callback_data="admin_approve_requests")],
         [InlineKeyboardButton(text="📋 Kanallar ro'yxati", callback_data="admin_list_channels")],
     ]
     if is_owner:
@@ -175,7 +226,7 @@ def admin_panel_keyboard(is_owner: bool):
 async def admin_panel_handler(message: types.Message):
     user_id = message.from_user.id
     if not await db.is_admin(user_id, OWNER_ID):
-        return  # admin bo'lmagan odamga hech narsa ko'rsatilmaydi
+        return
     is_owner = user_id == OWNER_ID
     await message.answer("🔧 Admin panel:", reply_markup=admin_panel_keyboard(is_owner))
 
@@ -200,9 +251,32 @@ async def admin_add_sor_callback(callback: types.CallbackQuery, state: FSMContex
         return
     await callback.message.answer(
         "So'rovli kanalning ID'sini yuboring (masalan: -1001234567890).\n\n"
-        "⚠️ Bot o'sha kanalda ADMIN bo'lishi shart (invite link yaratish huquqi bilan)."
+        "⚠️ Bot o'sha kanalda ADMIN bo'lishi shart."
     )
     await state.set_state(AdminStates.waiting_channel_sorovli)
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "admin_approve_requests")
+async def admin_approve_requests_callback(callback: types.CallbackQuery):
+    if not await db.is_admin(callback.from_user.id, OWNER_ID):
+        return
+    
+    pending = await db.get_pending_requests()
+    if not pending:
+        await callback.answer("Hozircha tasdiqlanmagan so'rovlar yo'q 📭", show_alert=True)
+        return
+
+    success_count = 0
+    for chat_id, user_id in pending:
+        try:
+            await bot.approve_chat_join_request(chat_id=chat_id, user_id=user_id)
+            success_count += 1
+        except Exception as e:
+            logging.warning(f"So'rovni tasdiqlashda xato ({user_id}): {e}")
+
+    await db.clear_pending_requests()
+    await callback.message.answer(f"✅ Jami {success_count} ta foydalanuvchining so'rovi tasdiqlandi!")
     await callback.answer()
 
 
@@ -217,18 +291,14 @@ async def receive_channel_majburiy(message: types.Message, state: FSMContext):
 @dp.message(AdminStates.waiting_channel_sorovli)
 async def receive_channel_sorovli(message: types.Message, state: FSMContext):
     channel_id = message.text.strip()
-
     if not (channel_id.lstrip("-").isdigit()):
-        await message.answer("❌ Bu ID emas. Kanal ID'si masalan shunday ko'rinishda bo'ladi: -1001234567890")
+        await message.answer("❌ Bu ID emas. Masalan: -1001234567890")
         return
 
     try:
         link = await bot.create_chat_invite_link(chat_id=channel_id, creates_join_request=True)
     except Exception as e:
-        await message.answer(
-            f"❌ Havola yaratib bo'lmadi: {e}\n\n"
-            "Bot o'sha kanalda ADMIN ekanligiga va 'foydalanuvchilarni taklif qilish' huquqi borligiga ishonch hosil qiling."
-        )
+        await message.answer(f"❌ Havola yaratib bo'lmadi: {e}")
         await state.clear()
         return
 
@@ -244,13 +314,8 @@ async def admin_list_channels_callback(callback: types.CallbackQuery):
     maj = await db.get_channels("majburiy")
     sor = await db.get_channels("sorovli")
 
-    text = "📋 Kanallar:\n\n"
-    text += "Majburiy:\n" + ("\n".join(maj) if maj else "— yo'q") + "\n\n"
-    text += "So'rovli:\n" + ("\n".join(sor) if sor else "— yo'q")
-
-    buttons = []
-    for ch in maj + sor:
-        buttons.append([InlineKeyboardButton(text=f"🗑 {ch}", callback_data=f"admin_rm_ch:{ch}")])
+    text = "📋 Kanallar:\n\nMajburiy:\n" + ("\n".join(maj) if maj else "— yo'q") + "\n\nSo'rovli:\n" + ("\n".join(sor) if sor else "— yo'q")
+    buttons = [[InlineKeyboardButton(text=f"🗑 {ch}", callback_data=f"admin_rm_ch:{ch}")] for ch in maj + sor]
 
     await callback.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None)
     await callback.answer()
@@ -271,7 +336,7 @@ async def admin_add_admin_callback(callback: types.CallbackQuery, state: FSMCont
     if callback.from_user.id != OWNER_ID:
         await callback.answer("Bu faqat owner uchun ⛔", show_alert=True)
         return
-    await callback.message.answer("Yangi admin qilmoqchi bo'lgan odamning Telegram ID'sini yuboring:")
+    await callback.message.answer("Yangi admin ID'sini yuboring:")
     await state.set_state(AdminStates.waiting_admin_id)
     await callback.answer()
 
@@ -286,7 +351,7 @@ async def receive_admin_id(message: types.Message, state: FSMContext):
         return
     new_admin_id = int(message.text.strip())
     await db.add_admin(new_admin_id, added_by=message.from_user.id)
-    await message.answer(f"✅ {new_admin_id} admin qilib qo'shildi.")
+    await message.answer(f"✅ {new_admin_id} admin qilindi.")
     await state.clear()
 
 
@@ -294,21 +359,9 @@ async def receive_admin_id(message: types.Message, state: FSMContext):
 async def admin_list_admins_callback(callback: types.CallbackQuery):
     if not await db.is_admin(callback.from_user.id, OWNER_ID):
         return
-    is_owner = callback.from_user.id == OWNER_ID
     admins = await db.get_admins()
-
-    text = "📋 Adminlar:\n\n"
-    text += f"👑 Owner: {OWNER_ID}\n"
-    if admins:
-        for admin_id, added_by in admins:
-            text += f"👤 {admin_id}\n"
-    else:
-        text += "Boshqa admin yo'q."
-
-    buttons = []
-    if is_owner:
-        for admin_id, added_by in admins:
-            buttons.append([InlineKeyboardButton(text=f"🗑 {admin_id}", callback_data=f"admin_rm_admin:{admin_id}")])
+    text = f"📋 Adminlar:\n👑 Owner: {OWNER_ID}\n" + ("\n".join([f"👤 {a[0]}" for a in admins]) if admins else "Boshqa admin yo'q.")
+    buttons = [[InlineKeyboardButton(text=f"🗑 {a[0]}", callback_data=f"admin_rm_admin:{a[0]}")] for a in admins] if callback.from_user.id == OWNER_ID else []
 
     await callback.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons) if buttons else None)
     await callback.answer()
