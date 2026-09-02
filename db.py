@@ -32,7 +32,7 @@ async def init_db():
             )
         """)
 
-        # So'rovli kanallar uchun arizalarni saqlash jadvali
+        # So'rovli kanallar arizalari
         await db.execute("""
             CREATE TABLE IF NOT EXISTS pending_requests (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -52,13 +52,11 @@ async def init_db():
         await db.commit()
 
 
-# --- FOYDALANUVCHILAR FUNKSIYALARI ---
-
+# --- FOYDALANUVCHILAR ---
 async def add_user_if_new(user_id: int, username: str, referred_by: int = None):
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("SELECT user_id FROM users WHERE user_id = ?", (user_id,)) as cursor:
-            user = await cursor.fetchone()
-            if not user:
+            if not await cursor.fetchone():
                 await db.execute(
                     "INSERT INTO users (user_id, username, referred_by, days_left) VALUES (?, ?, ?, ?)",
                     (user_id, username, referred_by, 3)
@@ -73,13 +71,11 @@ async def get_remaining_days(user_id: int) -> int:
             return row[0] if row else 3
 
 
-# --- KANALLAR FUNKSIYALARI ---
-
+# --- KANALLAR ---
 async def get_channels(channel_type: str) -> list:
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("SELECT channel FROM channels WHERE channel_type = ?", (channel_type,)) as cursor:
-            rows = await cursor.fetchall()
-            return [row[0] for row in rows]
+            return [row[0] for row in await cursor.fetchall()]
 
 
 async def get_channels_full(channel_type: str) -> list:
@@ -103,23 +99,18 @@ async def remove_channel(channel: str):
         await db.commit()
 
 
-# --- ADMINLAR FUNKSIYALARI ---
-
+# --- ADMINLAR ---
 async def is_admin(user_id: int, owner_id: int) -> bool:
     if user_id == owner_id:
         return True
     async with aiosqlite.connect(DB_NAME) as db:
         async with db.execute("SELECT admin_id FROM admins WHERE admin_id = ?", (user_id,)) as cursor:
-            row = await cursor.fetchone()
-            return row is not None
+            return await cursor.fetchone() is not None
 
 
 async def add_admin(new_admin_id: int, added_by: int):
     async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute(
-            "INSERT OR IGNORE INTO admins (admin_id, added_by) VALUES (?, ?)",
-            (new_admin_id, added_by)
-        )
+        await db.execute("INSERT OR IGNORE INTO admins (admin_id, added_by) VALUES (?, ?)", (new_admin_id, added_by))
         await db.commit()
 
 
@@ -135,14 +126,10 @@ async def get_admins() -> list:
             return await cursor.fetchall()
 
 
-# --- SO'ROVLI KANALLAR (JOIN REQUEST) FUNKSIYALARI ---
-
+# --- SO'ROVLI KANALLAR ---
 async def save_pending_request(chat_id: str, user_id: int):
     async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute(
-            "INSERT INTO pending_requests (chat_id, user_id) VALUES (?, ?)",
-            (chat_id, user_id)
-        )
+        await db.execute("INSERT INTO pending_requests (chat_id, user_id) VALUES (?, ?)", (chat_id, user_id))
         await db.commit()
 
 
@@ -156,3 +143,17 @@ async def clear_pending_requests():
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("DELETE FROM pending_requests")
         await db.commit()
+
+
+# --- USER BOTLARI ---
+async def save_user_bot(creator_id: int, bot_token: str):
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("INSERT OR REPLACE INTO user_bots (creator_id, bot_token) VALUES (?, ?)", (creator_id, bot_token))
+        await db.commit()
+
+
+async def get_all_user_bots() -> list:
+    async with aiosqlite.connect(DB_NAME) as db:
+        async with db.execute("SELECT bot_token FROM user_bots") as cursor:
+            rows = await cursor.fetchall()
+            return [row[0] for row in rows]
