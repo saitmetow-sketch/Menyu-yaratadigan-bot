@@ -19,7 +19,8 @@ async def init_db():
         await db.execute("""
             CREATE TABLE IF NOT EXISTS channels (
                 channel_id TEXT PRIMARY KEY,
-                type TEXT
+                type TEXT,
+                invite_link TEXT
             )
         """)
         await db.execute("""
@@ -94,9 +95,22 @@ async def get_channels(channel_type: str = None):
         return [r[0] for r in rows]
 
 
-async def add_channel(channel_id: str, channel_type: str):
+async def get_channels_full(channel_type: str = None):
+    """channel_id va invite_link bilan birga qaytaradi"""
     async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute("INSERT OR REPLACE INTO channels (channel_id, type) VALUES (?, ?)", (channel_id, channel_type))
+        if channel_type:
+            cursor = await db.execute("SELECT channel_id, invite_link FROM channels WHERE type = ?", (channel_type,))
+        else:
+            cursor = await db.execute("SELECT channel_id, invite_link FROM channels")
+        return await cursor.fetchall()
+
+
+async def add_channel(channel_id: str, channel_type: str, invite_link: str = None):
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO channels (channel_id, type, invite_link) VALUES (?, ?, ?)",
+            (channel_id, channel_type, invite_link)
+        )
         await db.commit()
 
 
